@@ -160,7 +160,7 @@ describe("Compound", function () {
         })
 
         describe("test", async () => {
-            const CORRECT_BORROW_AMOUNT = 50n * DECIMAL; 
+            const CORRECT_BORROW_AMOUNT = 50n * DECIMAL;
 
             it("assert borrow failed, revert as BorrowComptrollerRejection INSUFFICIENT_SHORTFALL", async () => {
                 const BORROW_AMOUNT = 60n * DECIMAL;
@@ -200,5 +200,61 @@ describe("Compound", function () {
                     );
             });
         })
+    })
+
+    describe("Test liquidate", async () => {
+
+        const CORRECT_BORROW_AMOUNT = 50n * DECIMAL;
+        const CLOSE_FACTOR = BigInt(0.5 * 1e18);
+        let shortfall;
+
+        it("borrow cErc20A", async () => {
+            await expect(cErc20A.borrow(CORRECT_BORROW_AMOUNT)).to
+                .changeTokenBalances(
+                    erc20A,
+                    [owner, cErc20A],
+                    [CORRECT_BORROW_AMOUNT, -CORRECT_BORROW_AMOUNT],
+                );
+        });
+
+        it("assert shortfall greater then 0 after set new collateral factor", async () => {
+            const NEW_COLLATERA_FACTOR = BigInt(0.3 * 1e18);
+
+            await comptroller._setCollateralFactor(cErc20B.address, NEW_COLLATERA_FACTOR)
+
+            let market = await comptroller.markets(cErc20B.address);
+            expect(market.collateralFactorMantissa).to.eq(NEW_COLLATERA_FACTOR);
+
+            const results = await comptroller.getAccountLiquidity(owner.address)
+            shortfall = BigInt(results[2])
+            expect(shortfall).to.gt(0)
+        });
+
+        it("setup close factor to 50%", async () => {
+            await comptroller._setCloseFactor(CLOSE_FACTOR)
+        })
+
+        it("setup liquidation incentive to 10%", async () => {
+            await comptroller._setLiquidationIncentive(ethers.utils.parseUnits("0.1", 18))
+        })
+
+        it("Test liquidate: signer1 repay cErc20A for owner", async () => {
+            const repayAmount = shortfall * CLOSE_FACTOR / DECIMAL
+
+            await erc20A.connect(signer1).mint(repayAmount);
+            await erc20A.connect(signer1).approve(cErc20A.address, repayAmount);
+
+            await expect(
+                cErc20A
+                    .connect(signer1)
+                    .liquidateBorrow(owner.address, repayAmount, cErc20B.address),
+            )
+                .to.changeTokenBalances(
+                    erc20A,
+                    [cErc20A, signer1],
+                    [repayAmount, -repayAmount],
+                )
+        })
+
     })
 });
