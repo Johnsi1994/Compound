@@ -5,6 +5,10 @@ describe("Compound", function () {
     const DECIMAL = 10n ** 18n;
     const MINT_AMOUNT = 100n * DECIMAL;
 
+    const CORRECT_BORROW_AMOUNT = 50n * DECIMAL;
+    const CLOSE_FACTOR = BigInt(0.5 * 1e18);
+    const LIQUIDATION_INCENTIVE = BigInt(0.1 * 1e18);
+
     let owner, signer1
     let erc20Factory, cErc20Factory, erc20A, cErc20A, erc20B, cErc20B
     let comptroller, simplePriceOracle, interestRateModel
@@ -160,7 +164,6 @@ describe("Compound", function () {
         })
 
         describe("test", async () => {
-            const CORRECT_BORROW_AMOUNT = 50n * DECIMAL;
 
             it("assert borrow failed, revert as BorrowComptrollerRejection INSUFFICIENT_SHORTFALL", async () => {
                 const BORROW_AMOUNT = 60n * DECIMAL;
@@ -202,10 +205,9 @@ describe("Compound", function () {
         })
     })
 
-    describe("Test liquidate", async () => {
 
-        const CORRECT_BORROW_AMOUNT = 50n * DECIMAL;
-        const CLOSE_FACTOR = BigInt(0.5 * 1e18);
+
+    describe("Test liquidate: change collateral factor", async () => {
         let shortfall;
 
         it("borrow cErc20A", async () => {
@@ -235,7 +237,7 @@ describe("Compound", function () {
         })
 
         it("setup liquidation incentive to 10%", async () => {
-            await comptroller._setLiquidationIncentive(ethers.utils.parseUnits("0.1", 18))
+            await comptroller._setLiquidationIncentive(LIQUIDATION_INCENTIVE)
         })
 
         it("Test liquidate: signer1 repay cErc20A for owner", async () => {
@@ -256,5 +258,173 @@ describe("Compound", function () {
                 )
         })
 
+    })
+
+
+
+    describe("Test liquidate: change price", async () => {
+
+        describe("Reset", async () => {
+            describe("Deploy", async () => {
+                it("deploy erc20A", async function () {
+                    erc20Factory = await ethers.getContractFactory("TestERC20");
+                    erc20A = await erc20Factory.deploy(
+                        "TokenA",
+                        "TKA",
+                        ethers.utils.parseUnits("1000000", 18)
+                    );
+                    await erc20A.deployed();
+                })
+
+                it("deploy comptroller", async function () {
+                    const comptrollerFactory = await ethers.getContractFactory("Comptroller");
+                    comptroller = await comptrollerFactory.deploy();
+                    await comptroller.deployed();
+                })
+
+                it("deploy simplePriceOracle", async function () {
+                    const priceOracleFactory = await ethers.getContractFactory("SimplePriceOracle");
+                    simplePriceOracle = await priceOracleFactory.deploy();
+                    await simplePriceOracle.deployed();
+                })
+
+                it("deploy interest rate model", async function () {
+                    const interestRateModelFactory = await ethers.getContractFactory("WhitePaperInterestRateModel");
+                    interestRateModel = await interestRateModelFactory.deploy(
+                        ethers.utils.parseUnits("0", 18),
+                        ethers.utils.parseUnits("0", 18),
+                    );
+                    await interestRateModel.deployed();
+                })
+
+                it("deploy cErc20A", async function () {
+                    cErc20Factory = await ethers.getContractFactory("CErc20Immutable");
+                    cErc20A = await cErc20Factory.deploy(
+                        erc20A.address,
+                        comptroller.address,
+                        interestRateModel.address,
+                        ethers.utils.parseUnits("1", 18),
+                        "cTokenA",
+                        "cTKA",
+                        18,
+                        owner.address,
+                    );
+                    await cErc20A.deployed();
+                })
+
+                it("deploy erc20B", async function () {
+                    erc20B = await erc20Factory.deploy(
+                        "TokenB",
+                        "TKB",
+                        ethers.utils.parseUnits("1000000", 18)
+                    );
+                    await erc20B.deployed();
+                })
+
+                it("deploy cErc20B", async function () {
+                    cErc20B = await cErc20Factory.deploy(
+                        erc20B.address,
+                        comptroller.address,
+                        interestRateModel.address,
+                        ethers.utils.parseUnits("1", 18),
+                        "cTokenB",
+                        "cTKB",
+                        18,
+                        owner.address,
+                    );
+                    await cErc20B.deployed();
+                })
+            })
+
+            describe("Settings", async () => {
+                it("setup SimplePriceOracle to Comptroller", async function () {
+                    await comptroller._setPriceOracle(simplePriceOracle.address);
+                })
+
+                it("setup supportMarket to Comptroller", async function () {
+                    await comptroller._supportMarket(cErc20A.address);
+                })
+
+                it("setup cErc20B to supportMarket", async function () {
+                    await comptroller._supportMarket(cErc20B.address);
+                })
+
+                it("setup underlying price", async function () {
+                    // set tokenA's price as 1$
+                    await simplePriceOracle.setUnderlyingPrice(cErc20A.address, 1n * DECIMAL);
+
+                    // set tokenB's price as 100$
+                    await simplePriceOracle.setUnderlyingPrice(cErc20B.address, 100n * DECIMAL);
+                })
+
+                it("setup collateral factor", async function () {
+                    // set tokenB's collateral factor as 0.5
+                    await comptroller._setCollateralFactor(cErc20B.address, BigInt(0.5 * 1e18));
+                })
+
+                it("enter ctokenB to markets", async () => {
+                    // set cErc20B as collateral
+                    await comptroller.enterMarkets([cErc20B.address]);
+                });
+
+                it("setup close factor to 50%", async () => {
+                    await comptroller._setCloseFactor(CLOSE_FACTOR)
+                })
+
+                it("setup liquidation incentive to 10%", async () => {
+                    await comptroller._setLiquidationIncentive(LIQUIDATION_INCENTIVE)
+                })
+
+                it("supply erc20A", async () => {
+                    const supplyAmount = 1000n * DECIMAL
+                    await erc20A.connect(signer1).mint(supplyAmount);
+                    await erc20A.connect(signer1).approve(cErc20A.address, supplyAmount);
+                    await cErc20A.connect(signer1).mint(supplyAmount);
+                })
+
+                it("mint erc20B", async () => {
+                    const tokenBAmount = 1n * DECIMAL;
+                    await erc20B.approve(cErc20B.address, tokenBAmount);
+                    await cErc20B.mint(tokenBAmount);
+                })
+            })
+        })
+
+        describe("test", async () => {
+            it("borrow cErc20A", async () => {
+                await expect(cErc20A.borrow(CORRECT_BORROW_AMOUNT)).to
+                    .changeTokenBalances(
+                        erc20A,
+                        [owner, cErc20A],
+                        [CORRECT_BORROW_AMOUNT, -CORRECT_BORROW_AMOUNT],
+                    );
+            });
+
+            it("change cErc20B price", async () => {
+                await simplePriceOracle.setUnderlyingPrice(cErc20B.address, 50n * DECIMAL);
+            });
+
+            it("liquedate by change price", async () => {
+                const results = await comptroller.getAccountLiquidity(owner.address)
+                shortfall = BigInt(results[2])
+
+                const repayAmount = shortfall * CLOSE_FACTOR / DECIMAL
+
+                await erc20A.connect(signer1).mint(repayAmount);
+                await erc20A.connect(signer1).approve(cErc20A.address, repayAmount);
+
+                await expect(
+                    cErc20A
+                        .connect(signer1)
+                        .liquidateBorrow(owner.address, repayAmount, cErc20B.address),
+                )
+                    .to.changeTokenBalances(
+                        erc20A,
+                        [cErc20A, signer1],
+                        [repayAmount, -repayAmount],
+                    )
+            });
+
+        })
     })
 });
