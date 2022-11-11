@@ -6,6 +6,7 @@
   },
   "dependencies": {
     "@nomicfoundation/hardhat-network-helpers": "^1.0.6",
-    "@openzeppelin/contracts": "^4.7.3"
+    "@openzeppelin/contracts": "^4.8.0",
+    "@uniswap/v3-periphery": "^1.4.3"
   }
 }
